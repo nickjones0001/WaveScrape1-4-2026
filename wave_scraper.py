@@ -8,11 +8,14 @@ import pytz
 import traceback
 
 # --- CONFIGURATION ---
+# Target Google Sheet and Tab
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
+
+# Timezone set to Melbourne to resolve the 1-hour fast error
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# VERIFIED PORT PHILLIP BAY PERMANENT LOCK
+# PERMANENTLY LOCKED PORT PHILLIP BAY NODES (Verified Apr 2026)
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
     {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11011?type=waves&simplified=1"},
@@ -25,7 +28,7 @@ HEADERS = {
 }
 
 def fetch_data():
-    """Extracts data from verified buoy IDs and formats for Google Sheets."""
+    """Extracts data from the locked buoy IDs and formats for the 13-column sheet."""
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -43,43 +46,44 @@ def fetch_data():
                 payload = response.json().get("data", [])
                 if payload:
                     latest = payload[0]
-                    # Convert buoy time to Melbourne Local
+                    # Convert buoy Unix time to Melbourne Local Time
                     dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
                     
                     obs_date = dt_melb.strftime("%d/%m/%Y")
                     obs_time = dt_melb.strftime("%H:%M")
                     obs_timestamp = dt_melb.strftime("%d/%m/%Y %H:%M")
                     
+                    # Data Mapping
                     sig_wave = latest.get("hsig", "")
                     peak_period = latest.get("tp", "")
                     peak_direction = latest.get("tpdeg", "")
                     wind_spd = latest.get("windspeed", "")
                     wind_dir = latest.get("winddirect", "")
             else:
-                node_display_name += f" (HTTP {response.status_code})"
-        except Exception as e:
-            node_display_name += " (Script Error)"
+                node_display_name += f" (Status {response.status_code})"
+        except Exception:
+            node_display_name += " (Fetch Error)"
 
-        # Append row in 13-column structure (A through M)
+        # 13-column structure (A through M)
         rows_to_append.append([
-            obs_date,           # A
-            obs_time,           # B
-            obs_timestamp,      # C
-            node_display_name,  # D
-            sig_wave,           # E
-            peak_period,        # F
-            peak_direction,     # G
-            wind_spd,           # H
-            "",                 # I (Gusts placeholder)
-            wind_dir,           # J
-            ext_date,           # K
-            ext_time,           # L
-            ext_timestamp       # M
+            obs_date,           # A: Obs Date
+            obs_time,           # B: Obs Time
+            obs_timestamp,      # C: Obs Timestamp
+            node_display_name,  # D: Node
+            sig_wave,           # E: Sig Wave Ht
+            peak_period,        # F: Peak Wave Period
+            peak_direction,     # G: Peak Wave Direction
+            wind_spd,           # H: Wind Spd (kts)
+            "",                 # I: Gusts (Empty)
+            wind_dir,           # J: Wind Dir
+            ext_date,           # K: Ext Date
+            ext_time,           # L: Ext Time
+            ext_timestamp       # M: Ext Timestamp
         ])
     return rows_to_append
 
 def update_sheet(data):
-    """Authenticates and writes the batch to the first empty row."""
+    """Authenticates via GOOGLE_CREDS secret and appends data to the next empty row."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
     if not creds_raw or not data:
         print("Missing Credentials or Data.")
@@ -92,16 +96,18 @@ def update_sheet(data):
         ss = client.open_by_key(SPREADSHEET_ID)
         sheet = ss.worksheet(SHEET_NAME)
         
-        # Calculate start row based on Column D (Node Name)
-        next_row = len(sheet.col_values(4)) + 1
+        # Find next empty row based on the 'Node' column (D)
+        col_d_values = sheet.col_values(4)
+        next_row = len(col_d_values) + 1
         if next_row < 2:
             next_row = 2
             
         end_row = next_row + len(data) - 1
         range_to_update = f"A{next_row}:M{end_row}"
         
+        # Batch update the sheet
         sheet.update(range_name=range_to_update, values=data)
-        print(f"SUCCESS: Logged {len(data)} rows to {SHEET_NAME} starting at Row {next_row}")
+        print(f"SUCCESS: {len(data)} rows logged to {SHEET_NAME} starting at Row {next_row}")
         
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
@@ -110,3 +116,4 @@ def update_sheet(data):
 if __name__ == "__main__":
     extracted_rows = fetch_data()
     update_sheet(extracted_rows)
+    
