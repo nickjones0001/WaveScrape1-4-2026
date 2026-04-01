@@ -4,11 +4,15 @@ import gspread
 import json
 from google.oauth2.service_account import Credentials
 from datetime import datetime
+import pytz  # Handles Melbourne Timezone
 import traceback
 
 # --- CONFIGURATION ---
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
+
+# Define Melbourne Timezone
+MELB_TZ = pytz.timezone('Australia/Melbourne')
 
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11002?type=waves&simplified=1"},
@@ -23,10 +27,12 @@ HEADERS = {
 
 def fetch_data():
     print("Starting data fetch from AusWaves...")
-    now = datetime.now()
-    ext_date = now.strftime("%d/%m/%Y")
-    ext_time = now.strftime("%H:%M")
-    ext_timestamp = now.strftime("%d/%m/%Y %H:%M")
+    
+    # Capture current Melbourne time for Extraction columns
+    now_melb = datetime.now(MELB_TZ)
+    ext_date = now_melb.strftime("%d/%m/%Y")
+    ext_time = now_melb.strftime("%H:%M")
+    ext_timestamp = now_melb.strftime("%d/%m/%Y %H:%M")
     
     rows_to_append = []
     for node in NODES:
@@ -40,12 +46,17 @@ def fetch_data():
                 json_data = response.json()
                 if json_data.get("data") and len(json_data["data"]) > 0:
                     latest = json_data["data"][0]
+                    
+                    # Convert buoy Unix time specifically to Melbourne Time
                     raw_time = latest.get("time")
                     if raw_time:
-                        dt_object = datetime.fromtimestamp(int(raw_time))
-                        obs_date = dt_object.strftime("%d/%m/%Y")
-                        obs_time = dt_object.strftime("%H:%M")
-                        obs_timestamp = dt_object.strftime("%d/%m/%Y %H:%M")
+                        # Create UTC datetime then convert to Melbourne
+                        dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
+                        dt_melb = dt_utc.astimezone(MELB_TZ)
+                        
+                        obs_date = dt_melb.strftime("%d/%m/%Y")
+                        obs_time = dt_melb.strftime("%H:%M")
+                        obs_timestamp = dt_melb.strftime("%d/%m/%Y %H:%M")
                     
                     sig_wave = latest.get("hsig", "")
                     peak_period = latest.get("tp", "")
@@ -86,20 +97,16 @@ def update_sheet(data):
         # Determine the first empty row by checking Column D (Node Name)
         col_d_values = sheet.col_values(4)
         next_row = len(col_d_values) + 1
-        
-        # Safety: If col_values returned nothing (brand new sheet), start at row 2
         if next_row < 2:
             next_row = 2
 
-        print(f"Calculated target start row: {next_row}")
+        print(f"Targeting Row: {next_row}")
         
-        # Define the range (A through M)
         end_row = next_row + len(data) - 1
         range_to_update = f"A{next_row}:M{end_row}"
         
-        # Use update instead of append_rows
         sheet.update(range_name=range_to_update, values=data)
-        print(f"SUCCESS: {len(data)} rows updated starting at row {next_row}")
+        print(f"SUCCESS: {len(data)} rows updated at Melbourne Time: {datetime.now(MELB_TZ).strftime('%H:%M:%S')}")
         
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
