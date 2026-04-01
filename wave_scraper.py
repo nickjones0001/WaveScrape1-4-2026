@@ -12,13 +12,14 @@ SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# MT ELIZA IS NOW PERMANENTLY LOCKED
+# MT ELIZA AND CENTRAL BAY ARE NOW LOCKED
 LOCKED_NODES = [
-    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"}
+    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
+    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11007?type=waves&simplified=1"}
 ]
 
-# DIAGNOSTIC RANGE: We will check these to find Sandringham and Central Bay
-DIAGNOSTIC_IDS = [11002, 11003, 11004, 11005, 11006, 11007, 11008]
+# NEW DIAGNOSTIC RANGE: Looking for Sandringham (0.33m / 3s / 224° SW)
+DIAGNOSTIC_IDS = [11009, 11010, 11011, 11012, 11013, 11014, 11015]
 
 HEADERS = {
     "Accept": "application/json",
@@ -26,8 +27,8 @@ HEADERS = {
 }
 
 def run_diagnostics():
-    print("--- STARTING DEVELOPER DIAGNOSTICS ---")
-    print("Comparing IDs to find Sandringham and Central Bay:")
+    print("--- STARTING DEVELOPER DIAGNOSTICS (PHASE 2) ---")
+    print("Checking higher IDs to find the Sandringham match:")
     for buoy_id in DIAGNOSTIC_IDS:
         url = f"https://auswaves.org/wp-json/waves/v1/buoys/{buoy_id}?type=waves&simplified=1"
         try:
@@ -38,9 +39,9 @@ def run_diagnostics():
                     obs = data[0]
                     print(f"ID {buoy_id} >> Ht: {obs.get('hsig')}m | Per: {obs.get('tp')}s | Dir: {obs.get('tpdeg')}°")
                 else:
-                    print(f"ID {buoy_id} >> No Data")
+                    print(f"ID {buoy_id} >> No Payload")
         except:
-            print(f"ID {buoy_id} >> Request Failed")
+            pass
     print("--- END OF DIAGNOSTICS ---")
 
 def fetch_locked_data():
@@ -54,26 +55,28 @@ def fetch_locked_data():
         try:
             response = requests.get(node["url"], headers=HEADERS, timeout=15)
             if response.status_code == 200:
-                latest = response.json()["data"][0]
-                dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
-                
-                rows.append([
-                    dt_melb.strftime("%d/%m/%Y"),
-                    dt_melb.strftime("%H:%M"),
-                    dt_melb.strftime("%d/%m/%Y %H:%M"),
-                    node["name"],
-                    latest.get("hsig", ""),
-                    latest.get("tp", ""),
-                    latest.get("tpdeg", ""),
-                    latest.get("windspeed", ""),
-                    "", # Gusts
-                    latest.get("winddirect", ""),
-                    ext_date,
-                    ext_time,
-                    ext_timestamp
-                ])
+                payload = response.json().get("data", [])
+                if payload:
+                    latest = payload[0]
+                    dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
+                    
+                    rows.append([
+                        dt_melb.strftime("%d/%m/%Y"),
+                        dt_melb.strftime("%H:%M"),
+                        dt_melb.strftime("%d/%m/%Y %H:%M"),
+                        node["name"],
+                        latest.get("hsig", ""),
+                        latest.get("tp", ""),
+                        latest.get("tpdeg", ""),
+                        latest.get("windspeed", ""),
+                        "", # Gusts placeholder
+                        latest.get("winddirect", ""),
+                        ext_date,
+                        ext_time,
+                        ext_timestamp
+                    ])
         except Exception as e:
-            print(f"Error fetching locked node {node['name']}: {e}")
+            print(f"Error fetching {node['name']}: {e}")
     return rows
 
 def update_sheet(data):
@@ -86,12 +89,13 @@ def update_sheet(data):
         client = gspread.authorize(creds)
         sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         
+        # Calculate next row based on Column D (Node)
         next_row = len(sheet.col_values(4)) + 1
         if next_row < 2: next_row = 2
         
         range_label = f"A{next_row}:M{next_row + len(data) - 1}"
         sheet.update(range_name=range_label, values=data)
-        print(f"SUCCESS: Mt Eliza logged to Row {next_row}")
+        print(f"SUCCESS: Logged {len(data)} nodes starting at Row {next_row}")
     except Exception as e:
         print(f"Sheets Error: {e}")
 
