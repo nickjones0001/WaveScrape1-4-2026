@@ -31,7 +31,7 @@ def fetch_data():
     rows_to_append = []
     for node in NODES:
         obs_date, obs_time, obs_timestamp = "N/A", "N/A", "N/A"
-        sig_wave, peak_per, peak_dir, wind_spd, wind_dir = "", "", "", "", ""
+        sig_wave, peak_period, peak_direction, wind_spd, wind_dir = "", "", "", "", ""
         node_display_name = node["name"]
 
         try:
@@ -40,8 +40,6 @@ def fetch_data():
                 json_data = response.json()
                 if json_data.get("data") and len(json_data["data"]) > 0:
                     latest = json_data["data"][0]
-                    
-                    # Convert time safely to integer
                     raw_time = latest.get("time")
                     if raw_time:
                         dt_object = datetime.fromtimestamp(int(raw_time))
@@ -50,8 +48,8 @@ def fetch_data():
                         obs_timestamp = dt_object.strftime("%d/%m/%Y %H:%M")
                     
                     sig_wave = latest.get("hsig", "")
-                    peak_per = latest.get("tp", "")
-                    peak_dir = latest.get("tpdeg", "")
+                    peak_period = latest.get("tp", "")
+                    peak_direction = latest.get("tpdeg", "")
                     wind_spd = latest.get("windspeed", "")
                     wind_dir = latest.get("winddirect", "")
                 else:
@@ -64,13 +62,13 @@ def fetch_data():
 
         rows_to_append.append([
             obs_date, obs_time, obs_timestamp, node_display_name,
-            sig_wave, peak_per, peak_dir, wind_spd, "", wind_dir,
+            sig_wave, peak_period, peak_direction, wind_spd, "", wind_dir,
             ext_date, ext_time, ext_timestamp
         ])
     return rows_to_append
 
 def update_sheet(data):
-    print("Attempting to connect to Google Sheets...")
+    print("Connecting to Google Sheets...")
     scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds_raw = os.environ.get('GOOGLE_CREDS')
     
@@ -82,19 +80,27 @@ def update_sheet(data):
         creds_json = json.loads(creds_raw)
         creds = Credentials.from_service_account_info(creds_json, scopes=scope)
         client = gspread.authorize(creds)
-        
-        print(f"Opening Spreadsheet ID: {SPREADSHEET_ID}")
         ss = client.open_by_key(SPREADSHEET_ID)
-        
-        print(f"Accessing Worksheet: {SHEET_NAME}")
         sheet = ss.worksheet(SHEET_NAME)
         
-        print("Appending data...")
-        sheet.append_rows(data)
-        print(f"SUCCESS: {len(data)} rows added at {datetime.now().strftime('%H:%M:%S')}")
+        # Determine the first empty row by checking Column D (Node Name)
+        col_d_values = sheet.col_values(4)
+        next_row = len(col_d_values) + 1
         
-    except gspread.exceptions.APIError as e:
-        print(f"CRITICAL ERROR: Google API 403. Did you share the sheet with {creds_json.get('client_email')}?")
+        # Safety: If col_values returned nothing (brand new sheet), start at row 2
+        if next_row < 2:
+            next_row = 2
+
+        print(f"Calculated target start row: {next_row}")
+        
+        # Define the range (A through M)
+        end_row = next_row + len(data) - 1
+        range_to_update = f"A{next_row}:M{end_row}"
+        
+        # Use update instead of append_rows
+        sheet.update(range_name=range_to_update, values=data)
+        print(f"SUCCESS: {len(data)} rows updated starting at row {next_row}")
+        
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
