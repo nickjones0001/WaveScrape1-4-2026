@@ -7,7 +7,7 @@ from datetime import datetime
 
 # --- CONFIGURATION ---
 # Replace with your actual Spreadsheet ID from the URL
-SPREADSHEET_ID = 'YOUR_SPREADSHEET_ID_HERE'
+SPREADSHEET_ID = 'Y1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
 
 # AusWaves Nodes mapping
