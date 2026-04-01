@@ -10,114 +10,92 @@ import traceback
 # --- CONFIGURATION ---
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
-
-# Forced Melbourne Timezone (AEST/AEDT)
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# VERIFIED PORT PHILLIP BAY MAPPING VIA DIRECTIONAL CROSS-REFERENCE
-NODES = [
-    {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
-    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11002?type=waves&simplified=1"},
-    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11003?type=waves&simplified=1"}
+# MT ELIZA IS NOW PERMANENTLY LOCKED
+LOCKED_NODES = [
+    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"}
 ]
+
+# DIAGNOSTIC RANGE: We will check these to find Sandringham and Central Bay
+DIAGNOSTIC_IDS = [11002, 11003, 11004, 11005, 11006, 11007, 11008]
 
 HEADERS = {
     "Accept": "application/json",
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
-def get_cardinal(degree):
-    """Converts degrees to cardinal direction for console verification."""
-    try:
-        d = float(degree)
-        dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
-        ix = round(d / (360. / len(dirs)))
-        return dirs[ix % len(dirs)]
-    except:
-        return ""
+def run_diagnostics():
+    print("--- STARTING DEVELOPER DIAGNOSTICS ---")
+    print("Comparing IDs to find Sandringham and Central Bay:")
+    for buoy_id in DIAGNOSTIC_IDS:
+        url = f"https://auswaves.org/wp-json/waves/v1/buoys/{buoy_id}?type=waves&simplified=1"
+        try:
+            res = requests.get(url, headers=HEADERS, timeout=10)
+            if res.status_code == 200:
+                data = res.json().get("data", [])
+                if data:
+                    obs = data[0]
+                    print(f"ID {buoy_id} >> Ht: {obs.get('hsig')}m | Per: {obs.get('tp')}s | Dir: {obs.get('tpdeg')}°")
+                else:
+                    print(f"ID {buoy_id} >> No Data")
+        except:
+            print(f"ID {buoy_id} >> Request Failed")
+    print("--- END OF DIAGNOSTICS ---")
 
-def fetch_data():
-    print("Starting data fetch from Direction-Verified Port Phillip Bay endpoints...")
+def fetch_locked_data():
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
     ext_timestamp = now_melb.strftime("%d/%m/%Y %H:%M")
     
-    rows_to_append = []
-    for node in NODES:
-        obs_date, obs_time, obs_timestamp = "N/A", "N/A", "N/A"
-        sig_wave, peak_period, peak_direction, wind_spd, wind_dir = "", "", "", "", ""
-        node_display_name = node["name"]
-
+    rows = []
+    for node in LOCKED_NODES:
         try:
             response = requests.get(node["url"], headers=HEADERS, timeout=15)
             if response.status_code == 200:
-                json_data = response.json()
-                if json_data.get("data") and len(json_data["data"]) > 0:
-                    latest = json_data["data"][0]
-                    
-                    # Process Unix Timestamp to Melbourne Time
-                    raw_time = latest.get("time")
-                    if raw_time:
-                        dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
-                        dt_melb = dt_utc.astimezone(MELB_TZ)
-                        obs_date = dt_melb.strftime("%d/%m/%Y")
-                        obs_time = dt_melb.strftime("%H:%M")
-                        obs_timestamp = dt_melb.strftime("%d/%m/%Y %H:%M")
-                    
-                    sig_wave = latest.get("hsig", "")
-                    peak_period = latest.get("tp", "")
-                    peak_direction = latest.get("tpdeg", "")
-                    wind_spd = latest.get("windspeed", "")
-                    wind_dir = latest.get("winddirect", "")
-                    
-                    cardinal = get_cardinal(peak_direction)
-                    print(f"Verified {node['name']}: {sig_wave}m @ {peak_direction}° ({cardinal})")
-                else:
-                    node_display_name += " (No Data)"
-            else:
-                node_display_name += f" (HTTP {response.status_code})"
+                latest = response.json()["data"][0]
+                dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
+                
+                rows.append([
+                    dt_melb.strftime("%d/%m/%Y"),
+                    dt_melb.strftime("%H:%M"),
+                    dt_melb.strftime("%d/%m/%Y %H:%M"),
+                    node["name"],
+                    latest.get("hsig", ""),
+                    latest.get("tp", ""),
+                    latest.get("tpdeg", ""),
+                    latest.get("windspeed", ""),
+                    "", # Gusts
+                    latest.get("winddirect", ""),
+                    ext_date,
+                    ext_time,
+                    ext_timestamp
+                ])
         except Exception as e:
-            print(f"Error processing {node['name']}: {str(e)}")
-
-        rows_to_append.append([
-            obs_date, obs_time, obs_timestamp, node_display_name,
-            sig_wave, peak_period, peak_direction, wind_spd, "", wind_dir,
-            ext_date, ext_time, ext_timestamp
-        ])
-    return rows_to_append
+            print(f"Error fetching locked node {node['name']}: {e}")
+    return rows
 
 def update_sheet(data):
-    print("Connecting to Google Sheets...")
-    scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
     creds_raw = os.environ.get('GOOGLE_CREDS')
-    
-    if not creds_raw:
-        print("CRITICAL ERROR: GOOGLE_CREDS environment variable is missing!")
-        return
+    if not creds_raw or not data: return
 
     try:
-        creds_json = json.loads(creds_raw)
-        creds = Credentials.from_service_account_info(creds_json, scopes=scope)
+        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        creds = Credentials.from_service_account_info(json.loads(creds_raw), scopes=scope)
         client = gspread.authorize(creds)
-        ss = client.open_by_key(SPREADSHEET_ID)
-        sheet = ss.worksheet(SHEET_NAME)
+        sheet = client.open_by_key(SPREADSHEET_ID).worksheet(SHEET_NAME)
         
-        col_d_values = sheet.col_values(4)
-        next_row = len(col_d_values) + 1
-        if next_row < 2:
-            next_row = 2
-
-        end_row = next_row + len(data) - 1
-        range_to_update = f"A{next_row}:M{end_row}"
+        next_row = len(sheet.col_values(4)) + 1
+        if next_row < 2: next_row = 2
         
-        sheet.update(range_name=range_to_update, values=data)
-        print(f"SUCCESS: Data aligned to Directional Profile logged to {SHEET_NAME}.")
-        
+        range_label = f"A{next_row}:M{next_row + len(data) - 1}"
+        sheet.update(range_name=range_label, values=data)
+        print(f"SUCCESS: Mt Eliza logged to Row {next_row}")
     except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
-        traceback.print_exc()
+        print(f"Sheets Error: {e}")
 
 if __name__ == "__main__":
-    extracted_rows = fetch_data()
-    update_sheet(extracted_rows)
+    run_diagnostics()
+    rows = fetch_locked_data()
+    update_sheet(rows)
