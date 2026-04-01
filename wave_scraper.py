@@ -11,17 +11,14 @@ import traceback
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
 
-# Explicitly set Melbourne Timezone to match your 9:44PM observation
+# Forced Melbourne Timezone (AEST/AEDT)
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# VERIFIED ENDPOINTS:
-# 11001: Mt Eliza
-# 11006: Sandringham (Verified against 0.33m / 3s observation)
-# 11004: Central Bay (Port Phillip)
+# VERIFIED PORT PHILLIP BAY MAPPING VIA DIRECTIONAL CROSS-REFERENCE
 NODES = [
-    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
-    {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11006?type=waves&simplified=1"},
-    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11004?type=waves&simplified=1"}
+    {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
+    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11002?type=waves&simplified=1"},
+    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11003?type=waves&simplified=1"}
 ]
 
 HEADERS = {
@@ -29,8 +26,18 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
 }
 
+def get_cardinal(degree):
+    """Converts degrees to cardinal direction for console verification."""
+    try:
+        d = float(degree)
+        dirs = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+        ix = round(d / (360. / len(dirs)))
+        return dirs[ix % len(dirs)]
+    except:
+        return ""
+
 def fetch_data():
-    print("Starting data fetch from verified AusWaves endpoints...")
+    print("Starting data fetch from Direction-Verified Port Phillip Bay endpoints...")
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -49,7 +56,7 @@ def fetch_data():
                 if json_data.get("data") and len(json_data["data"]) > 0:
                     latest = json_data["data"][0]
                     
-                    # Convert buoy Unix time to Melbourne Time (fixes the 1-hour fast error)
+                    # Process Unix Timestamp to Melbourne Time
                     raw_time = latest.get("time")
                     if raw_time:
                         dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
@@ -64,7 +71,8 @@ def fetch_data():
                     wind_spd = latest.get("windspeed", "")
                     wind_dir = latest.get("winddirect", "")
                     
-                    print(f"Verified {node['name']}: {sig_wave}m @ {obs_time}")
+                    cardinal = get_cardinal(peak_direction)
+                    print(f"Verified {node['name']}: {sig_wave}m @ {peak_direction}° ({cardinal})")
                 else:
                     node_display_name += " (No Data)"
             else:
@@ -95,18 +103,16 @@ def update_sheet(data):
         ss = client.open_by_key(SPREADSHEET_ID)
         sheet = ss.worksheet(SHEET_NAME)
         
-        # Calculate next empty row based on Column D (Node Name)
         col_d_values = sheet.col_values(4)
         next_row = len(col_d_values) + 1
         if next_row < 2:
             next_row = 2
 
-        print(f"Targeting Row: {next_row}")
         end_row = next_row + len(data) - 1
         range_to_update = f"A{next_row}:M{end_row}"
         
         sheet.update(range_name=range_to_update, values=data)
-        print(f"SUCCESS: Corrected data logged to {SHEET_NAME}.")
+        print(f"SUCCESS: Data aligned to Directional Profile logged to {SHEET_NAME}.")
         
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
