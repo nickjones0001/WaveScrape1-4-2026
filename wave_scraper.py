@@ -38,21 +38,29 @@ def fetch_data():
             response = requests.get(node["url"], headers=HEADERS, timeout=15)
             if response.status_code == 200:
                 json_data = response.json()
-                if json_data.get("data"):
+                if json_data.get("data") and len(json_data["data"]) > 0:
                     latest = json_data["data"][0]
-                    dt_object = datetime.fromtimestamp(latest.get("time", 0))
-                    obs_date = dt_object.strftime("%d/%m/%Y")
-                    obs_time = dt_object.strftime("%H:%M")
-                    obs_timestamp = dt_object.strftime("%d/%m/%Y %H:%M")
+                    
+                    # Convert time safely to integer
+                    raw_time = latest.get("time")
+                    if raw_time:
+                        dt_object = datetime.fromtimestamp(int(raw_time))
+                        obs_date = dt_object.strftime("%d/%m/%Y")
+                        obs_time = dt_object.strftime("%H:%M")
+                        obs_timestamp = dt_object.strftime("%d/%m/%Y %H:%M")
+                    
                     sig_wave = latest.get("hsig", "")
                     peak_per = latest.get("tp", "")
                     peak_dir = latest.get("tpdeg", "")
                     wind_spd = latest.get("windspeed", "")
                     wind_dir = latest.get("winddirect", "")
+                else:
+                    node_display_name += " (No Data)"
             else:
-                print(f"Warning: {node['name']} returned status {response.status_code}")
+                node_display_name += f" (HTTP {response.status_code})"
         except Exception as e:
-            print(f"Error fetching {node['name']}: {e}")
+            print(f"Error processing {node['name']}: {str(e)}")
+            node_display_name += " (Script Error)"
 
         rows_to_append.append([
             obs_date, obs_time, obs_timestamp, node_display_name,
@@ -71,7 +79,6 @@ def update_sheet(data):
         return
 
     try:
-        print("Parsing credentials...")
         creds_json = json.loads(creds_raw)
         creds = Credentials.from_service_account_info(creds_json, scopes=scope)
         client = gspread.authorize(creds)
@@ -84,16 +91,10 @@ def update_sheet(data):
         
         print("Appending data...")
         sheet.append_rows(data)
-        print(f"SUCCESS: {len(data)} rows added.")
+        print(f"SUCCESS: {len(data)} rows added at {datetime.now().strftime('%H:%M:%S')}")
         
-    except json.JSONDecodeError:
-        print("CRITICAL ERROR: The GOOGLE_CREDS secret is not valid JSON. Check for stray characters.")
-    except gspread.exceptions.SpreadsheetNotFound:
-        print("CRITICAL ERROR: Spreadsheet ID not found. Check the ID in the script.")
-    except gspread.exceptions.WorksheetNotFound:
-        print(f"CRITICAL ERROR: Tab named '{SHEET_NAME}' not found.")
     except gspread.exceptions.APIError as e:
-        print(f"CRITICAL ERROR: Google API returned an error. Is the sheet shared with the service account email? Detail: {e}")
+        print(f"CRITICAL ERROR: Google API 403. Did you share the sheet with {creds_json.get('client_email')}?")
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
