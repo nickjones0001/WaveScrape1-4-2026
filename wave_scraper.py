@@ -4,20 +4,24 @@ import gspread
 import json
 from google.oauth2.service_account import Credentials
 from datetime import datetime
-import pytz  # Handles Melbourne Timezone
+import pytz
 import traceback
 
 # --- CONFIGURATION ---
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
 
-# Define Melbourne Timezone
+# Explicitly set Melbourne Timezone
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
+# CORRECTED NODES: 
+# 11001 = Mt Eliza
+# 11003 = Sandringham
+# 11005 = Central Bay (Port Phillip)
 NODES = [
-    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11002?type=waves&simplified=1"},
+    {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
     {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11003?type=waves&simplified=1"},
-    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11004?type=waves&simplified=1"}
+    {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11005?type=waves&simplified=1"}
 ]
 
 HEADERS = {
@@ -28,7 +32,7 @@ HEADERS = {
 def fetch_data():
     print("Starting data fetch from AusWaves...")
     
-    # Capture current Melbourne time for Extraction columns
+    # Capture current Melbourne time for Extraction columns (K, L, M)
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -47,10 +51,9 @@ def fetch_data():
                 if json_data.get("data") and len(json_data["data"]) > 0:
                     latest = json_data["data"][0]
                     
-                    # Convert buoy Unix time specifically to Melbourne Time
+                    # Convert buoy Unix time to Melbourne Time (Col A, B, C)
                     raw_time = latest.get("time")
                     if raw_time:
-                        # Create UTC datetime then convert to Melbourne
                         dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
                         dt_melb = dt_utc.astimezone(MELB_TZ)
                         
@@ -71,6 +74,7 @@ def fetch_data():
             print(f"Error processing {node['name']}: {str(e)}")
             node_display_name += " (Script Error)"
 
+        # Rows align to your 13-column headers (A through M)
         rows_to_append.append([
             obs_date, obs_time, obs_timestamp, node_display_name,
             sig_wave, peak_period, peak_direction, wind_spd, "", wind_dir,
@@ -94,7 +98,7 @@ def update_sheet(data):
         ss = client.open_by_key(SPREADSHEET_ID)
         sheet = ss.worksheet(SHEET_NAME)
         
-        # Determine the first empty row by checking Column D (Node Name)
+        # Calculate next empty row based on the Node Name column (Col D)
         col_d_values = sheet.col_values(4)
         next_row = len(col_d_values) + 1
         if next_row < 2:
@@ -105,8 +109,9 @@ def update_sheet(data):
         end_row = next_row + len(data) - 1
         range_to_update = f"A{next_row}:M{end_row}"
         
+        # Update the sheet starting from the first empty row
         sheet.update(range_name=range_to_update, values=data)
-        print(f"SUCCESS: {len(data)} rows updated at Melbourne Time: {datetime.now(MELB_TZ).strftime('%H:%M:%S')}")
+        print(f"SUCCESS: Logged to {SHEET_NAME} at Melbourne Time: {datetime.now(MELB_TZ).strftime('%H:%M:%S')}")
         
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
