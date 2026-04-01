@@ -14,10 +14,10 @@ SHEET_NAME = 'Wavetable'
 # Explicitly set Melbourne Timezone
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# CORRECTED NODES: 
+# VERIFIED PORT PHILLIP BAY NODES:
 # 11001 = Mt Eliza
 # 11003 = Sandringham
-# 11005 = Central Bay (Port Phillip)
+# 11005 = Central Bay
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
     {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11003?type=waves&simplified=1"},
@@ -49,11 +49,13 @@ def fetch_data():
             if response.status_code == 200:
                 json_data = response.json()
                 if json_data.get("data") and len(json_data["data"]) > 0:
+                    # Get the most recent observation (index 0)
                     latest = json_data["data"][0]
                     
                     # Convert buoy Unix time to Melbourne Time (Col A, B, C)
                     raw_time = latest.get("time")
                     if raw_time:
+                        # Ensure we convert the integer timestamp correctly to Melb time
                         dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
                         dt_melb = dt_utc.astimezone(MELB_TZ)
                         
@@ -66,6 +68,8 @@ def fetch_data():
                     peak_direction = latest.get("tpdeg", "")
                     wind_spd = latest.get("windspeed", "")
                     wind_dir = latest.get("winddirect", "")
+                    
+                    print(f"Fetched {node['name']}: {sig_wave}m @ {obs_time}")
                 else:
                     node_display_name += " (No Data)"
             else:
