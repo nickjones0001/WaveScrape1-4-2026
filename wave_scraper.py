@@ -16,11 +16,11 @@ MELB_TZ = pytz.timezone('Australia/Melbourne')
 
 # VERIFIED PORT PHILLIP BAY NODES:
 # 11001 = Mt Eliza
-# 11003 = Sandringham
+# 11006 = Sandringham (Corrected from 11003)
 # 11005 = Central Bay
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
-    {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11003?type=waves&simplified=1"},
+    {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11006?type=waves&simplified=1"},
     {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11005?type=waves&simplified=1"}
 ]
 
@@ -49,13 +49,12 @@ def fetch_data():
             if response.status_code == 200:
                 json_data = response.json()
                 if json_data.get("data") and len(json_data["data"]) > 0:
-                    # Get the most recent observation (index 0)
+                    # Get the most recent observation
                     latest = json_data["data"][0]
                     
                     # Convert buoy Unix time to Melbourne Time (Col A, B, C)
                     raw_time = latest.get("time")
                     if raw_time:
-                        # Ensure we convert the integer timestamp correctly to Melb time
                         dt_utc = datetime.fromtimestamp(int(raw_time), pytz.utc)
                         dt_melb = dt_utc.astimezone(MELB_TZ)
                         
