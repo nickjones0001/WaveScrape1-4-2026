@@ -28,7 +28,7 @@ HEADERS = {
 }
 
 def fetch_data():
-    """Extracts data and ensures numerical fields are properly typed for Google Sheets."""
+    """Extracts data and ensures numerical fields are properly typed."""
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -37,7 +37,6 @@ def fetch_data():
     rows_to_append = []
     for node in NODES:
         obs_date, obs_time, obs_timestamp = "N/A", "N/A", "N/A"
-        # Default values as empty strings or None
         sig_wave, peak_period, peak_direction, wind_spd, wind_dir = "", "", "", "", ""
         node_display_name = node["name"]
 
@@ -53,8 +52,7 @@ def fetch_data():
                     obs_time = dt_melb.strftime("%H:%M")
                     obs_timestamp = dt_melb.strftime("%d/%m/%Y %H:%M")
                     
-                    # Data Mapping with Numerical Conversion
-                    # We use float() to ensure Google Sheets treats these as numbers
+                    # Convert to float for Pivot Table compatibility
                     try:
                         sig_wave = float(latest.get("hsig", 0))
                         peak_period = float(latest.get("tp", 0))
@@ -62,33 +60,21 @@ def fetch_data():
                         wind_spd = float(latest.get("windspeed", 0))
                         wind_dir = float(latest.get("winddirect", 0))
                     except (ValueError, TypeError):
-                        # Fallback if data is missing or malformed
                         sig_wave = latest.get("hsig", "")
             else:
                 node_display_name += f" (Status {response.status_code})"
         except Exception:
             node_display_name += " (Fetch Error)"
 
-        # 13-column structure (A through M)
         rows_to_append.append([
-            obs_date,           # A: Obs Date
-            obs_time,           # B: Obs Time
-            obs_timestamp,      # C: Obs Timestamp
-            node_display_name,  # D: Node
-            sig_wave,           # E: Sig Wave Ht (Now a Number)
-            peak_period,        # F: Peak Wave Period (Now a Number)
-            peak_direction,     # G: Peak Wave Direction (Now a Number)
-            wind_spd,           # H: Wind Spd (kts) (Now a Number)
-            "",                 # I: Gusts (Empty)
-            wind_dir,           # J: Wind Dir (Now a Number)
-            ext_date,           # K: Ext Date
-            ext_time,           # L: Ext Time
-            ext_timestamp       # M: Ext Timestamp
+            obs_date, obs_time, obs_timestamp, node_display_name,
+            sig_wave, peak_period, peak_direction, wind_spd,
+            "", wind_dir, ext_date, ext_time, ext_timestamp
         ])
     return rows_to_append
 
 def update_sheet(data):
-    """Authenticates and appends data using user_entered values to preserve formatting."""
+    """Inserts new data at the top of the sheet (Row 2) and shifts old data down."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
     if not creds_raw or not data:
         print("Missing Credentials or Data.")
@@ -101,21 +87,11 @@ def update_sheet(data):
         ss = client.open_by_key(SPREADSHEET_ID)
         sheet = ss.worksheet(SHEET_NAME)
         
-        col_d_values = sheet.col_values(4)
-        next_row = len(col_d_values) + 1
-        if next_row < 2:
-            next_row = 2
-            
-        end_row = next_row + len(data) - 1
-        range_to_update = f"A{next_row}:M{end_row}"
+        # 1. Insert blank rows at the top (starting at Row 2, below headers)
+        num_new_rows = len(data)
+        sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
         
-        # KEY CHANGE: value_input_option='USER_ENTERED' 
-        # This tells Google Sheets to parse strings like "1.2" as numbers automatically
-        sheet.update(range_name=range_to_update, 
-                     values=data, 
-                     value_input_option='USER_ENTERED')
-        
-        print(f"SUCCESS: {len(data)} rows logged to {SHEET_NAME} starting at Row {next_row}")
+        print(f"SUCCESS: {num_new_rows} rows inserted at the TOP of {SHEET_NAME}")
         
     except Exception as e:
         print(f"CRITICAL ERROR: {str(e)}")
