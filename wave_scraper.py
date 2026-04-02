@@ -12,7 +12,7 @@ import traceback
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 SHEET_NAME = 'Wavetable'
 
-# Timezone set to Melbourne to resolve the 1-hour fast error
+# Timezone set to Melbourne
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
 # PERMANENTLY LOCKED PORT PHILLIP BAY NODES (Verified Apr 2026)
@@ -28,7 +28,7 @@ HEADERS = {
 }
 
 def fetch_data():
-    """Extracts data from the locked buoy IDs and formats for the 13-column sheet."""
+    """Extracts data and ensures numerical fields are properly typed for Google Sheets."""
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -37,6 +37,7 @@ def fetch_data():
     rows_to_append = []
     for node in NODES:
         obs_date, obs_time, obs_timestamp = "N/A", "N/A", "N/A"
+        # Default values as empty strings or None
         sig_wave, peak_period, peak_direction, wind_spd, wind_dir = "", "", "", "", ""
         node_display_name = node["name"]
 
@@ -46,19 +47,23 @@ def fetch_data():
                 payload = response.json().get("data", [])
                 if payload:
                     latest = payload[0]
-                    # Convert buoy Unix time to Melbourne Local Time
                     dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
                     
                     obs_date = dt_melb.strftime("%d/%m/%Y")
                     obs_time = dt_melb.strftime("%H:%M")
                     obs_timestamp = dt_melb.strftime("%d/%m/%Y %H:%M")
                     
-                    # Data Mapping
-                    sig_wave = latest.get("hsig", "")
-                    peak_period = latest.get("tp", "")
-                    peak_direction = latest.get("tpdeg", "")
-                    wind_spd = latest.get("windspeed", "")
-                    wind_dir = latest.get("winddirect", "")
+                    # Data Mapping with Numerical Conversion
+                    # We use float() to ensure Google Sheets treats these as numbers
+                    try:
+                        sig_wave = float(latest.get("hsig", 0))
+                        peak_period = float(latest.get("tp", 0))
+                        peak_direction = float(latest.get("tpdeg", 0))
+                        wind_spd = float(latest.get("windspeed", 0))
+                        wind_dir = float(latest.get("winddirect", 0))
+                    except (ValueError, TypeError):
+                        # Fallback if data is missing or malformed
+                        sig_wave = latest.get("hsig", "")
             else:
                 node_display_name += f" (Status {response.status_code})"
         except Exception:
@@ -70,12 +75,12 @@ def fetch_data():
             obs_time,           # B: Obs Time
             obs_timestamp,      # C: Obs Timestamp
             node_display_name,  # D: Node
-            sig_wave,           # E: Sig Wave Ht
-            peak_period,        # F: Peak Wave Period
-            peak_direction,     # G: Peak Wave Direction
-            wind_spd,           # H: Wind Spd (kts)
+            sig_wave,           # E: Sig Wave Ht (Now a Number)
+            peak_period,        # F: Peak Wave Period (Now a Number)
+            peak_direction,     # G: Peak Wave Direction (Now a Number)
+            wind_spd,           # H: Wind Spd (kts) (Now a Number)
             "",                 # I: Gusts (Empty)
-            wind_dir,           # J: Wind Dir
+            wind_dir,           # J: Wind Dir (Now a Number)
             ext_date,           # K: Ext Date
             ext_time,           # L: Ext Time
             ext_timestamp       # M: Ext Timestamp
@@ -83,7 +88,7 @@ def fetch_data():
     return rows_to_append
 
 def update_sheet(data):
-    """Authenticates via GOOGLE_CREDS secret and appends data to the next empty row."""
+    """Authenticates and appends data using user_entered values to preserve formatting."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
     if not creds_raw or not data:
         print("Missing Credentials or Data.")
@@ -96,7 +101,6 @@ def update_sheet(data):
         ss = client.open_by_key(SPREADSHEET_ID)
         sheet = ss.worksheet(SHEET_NAME)
         
-        # Find next empty row based on the 'Node' column (D)
         col_d_values = sheet.col_values(4)
         next_row = len(col_d_values) + 1
         if next_row < 2:
@@ -105,8 +109,12 @@ def update_sheet(data):
         end_row = next_row + len(data) - 1
         range_to_update = f"A{next_row}:M{end_row}"
         
-        # Batch update the sheet
-        sheet.update(range_name=range_to_update, values=data)
+        # KEY CHANGE: value_input_option='USER_ENTERED' 
+        # This tells Google Sheets to parse strings like "1.2" as numbers automatically
+        sheet.update(range_name=range_to_update, 
+                     values=data, 
+                     value_input_option='USER_ENTERED')
+        
         print(f"SUCCESS: {len(data)} rows logged to {SHEET_NAME} starting at Row {next_row}")
         
     except Exception as e:
@@ -116,4 +124,3 @@ def update_sheet(data):
 if __name__ == "__main__":
     extracted_rows = fetch_data()
     update_sheet(extracted_rows)
-    
