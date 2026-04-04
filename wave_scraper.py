@@ -76,13 +76,12 @@ def update_maritime_system(data):
                 if 'charts' in s: target_chart_id = s['charts'][0]['chartId']
 
         if target_chart_id:
-            # 4. CALC SCALE
+            # 4. CALC SCALE (Updated: 82px per row for +20% extra width)
             pivot_rows = pivot_sheet.get_values("A:A")
             row_count = len([r for r in pivot_rows if r and r[0]])
-            calc_width = max(1200, int((row_count * 68) + 250))
+            calc_width = max(1400, int((row_count * 82) + 300))
 
             # 5. THE WILDCARD REQUEST
-            # Using fields: "*" bypasses the need to name "newPosition"
             batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
             
             payload = {
@@ -112,7 +111,7 @@ def update_maritime_system(data):
             )
 
             if response.status_code == 200:
-                print(f"SUCCESS: Chart container set to {calc_width}x585 via Wildcard.")
+                print(f"SUCCESS: Chart container expanded to {calc_width}x585.")
             else:
                 print(f"API ERROR: {response.status_code} - {response.text}")
 
