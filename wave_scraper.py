@@ -20,61 +20,32 @@ NODES = [
     {"name": "Central Bay", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11007?type=waves&simplified=1"}
 ]
 
-HEADERS = {
-    "Accept": "application/json",
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
-}
+HEADERS = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
 
 def fetch_data():
-    """Extracts wave data from JSON endpoints."""
     now_melb = datetime.now(MELB_TZ)
-    ext_date = now_melb.strftime("%d/%m/%Y")
-    ext_time = now_melb.strftime("%H:%M")
-    
-    rows_to_append = []
+    ext_date, ext_time = now_melb.strftime("%d/%m/%Y"), now_melb.strftime("%H:%M")
+    rows = []
     for node in NODES:
-        obs_date, obs_time, obs_timestamp = "N/A", "N/A", "N/A"
-        sig_wave, peak_period, peak_direction, wind_spd, wind_dir = 0.0, 0.0, 0.0, 0.0, 0.0
-        node_display_name = node["name"]
-
         try:
-            response = requests.get(node["url"], headers=HEADERS, timeout=15)
-            if response.status_code == 200:
-                payload_list = response.json().get("data", [])
-                if payload_list:
-                    latest = payload_list[0]
-                    dt_melb = datetime.fromtimestamp(int(latest["time"]), pytz.utc).astimezone(MELB_TZ)
-                    
-                    obs_date = dt_melb.strftime("%Y-%m-%d")
-                    obs_time = dt_melb.strftime("%H:%M")
-                    obs_timestamp = dt_melb.strftime("%Y-%m-%d %H:%M")
-                    
-                    sig_wave = float(latest.get("hsig", 0))
-                    peak_period = float(latest.get("tp", 0))
-                    peak_direction = float(latest.get("tpdeg", 0))
-                    wind_spd = float(latest.get("windspeed", 0))
-                    wind_dir = float(latest.get("winddirect", 0))
-            else:
-                node_display_name += f" (Status {response.status_code})"
-        except Exception:
-            node_display_name += " (Fetch Error)"
-
-        rows_to_append.append([
-            obs_date, obs_time, obs_timestamp, node_display_name,
-            sig_wave, peak_period, peak_direction, wind_spd,
-            "", wind_dir, ext_date, ext_time, f"{ext_date} {ext_time}"
-        ])
-    return rows_to_append
+            res = requests.get(node["url"], headers=HEADERS, timeout=15)
+            if res.status_code == 200:
+                p = res.json().get("data", [{}])[0]
+                dt = datetime.fromtimestamp(int(p["time"]), pytz.utc).astimezone(MELB_TZ)
+                rows.append([
+                    dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Y-%m-%d %H:%M"),
+                    node["name"], float(p.get("hsig", 0)), float(p.get("tp", 0)),
+                    float(p.get("tpdeg", 0)), float(p.get("windspeed", 0)), "", 
+                    float(p.get("winddirect", 0)), ext_date, ext_time, f"{ext_date} {ext_time}"
+                ])
+        except: pass
+    return rows
 
 def update_maritime_system(data):
-    """Pushes data and resizes chart using Raw JSON String."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
-    if not creds_raw or not data:
-        print("Missing Credentials or Data.")
-        return
+    if not creds_raw or not data: return
 
     try:
-        # 1. AUTHENTICATION
         creds_info = json.loads(creds_raw)
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
@@ -89,78 +60,65 @@ def update_maritime_system(data):
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
         pivot_sheet = ss.worksheet(PIVOT_SHEET_NAME)
         
-        # 2. INSERT RAW DATA
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
-        print(f"SUCCESS: {len(data)} rows pushed to {DATA_SHEET_NAME}")
+        print(f"SUCCESS: Data pushed to {DATA_SHEET_NAME}")
 
-        # 3. FETCH METADATA
+        # Metadata Fetch
         meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
-        meta_headers = {"Authorization": f"Bearer {access_token}"}
-        meta_res = requests.get(meta_url, headers=meta_headers)
-        spreadsheet = meta_res.json()
+        spreadsheet = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"}).json()
         
-        target_sheet_id = None
-        target_chart_id = None
-        
+        target_sheet_id, target_chart_id = None, None
         for s in spreadsheet.get('sheets', []):
             if s['properties']['title'] == PIVOT_SHEET_NAME:
                 target_sheet_id = s['properties']['sheetId']
-                if 'charts' in s and len(s['charts']) > 0:
-                    target_chart_id = s['charts'][0]['chartId']
+                if 'charts' in s: target_chart_id = s['charts'][0]['chartId']
 
-        if target_chart_id is not None:
-            # 4. CALCULATE DYNAMIC WIDTH
+        if target_chart_id:
             pivot_rows = pivot_sheet.get_values("A:A")
-            last_row_count = len([r for r in pivot_rows if r and r[0]])
-            
-            calc_width = int((last_row_count * 68) + 250)
-            if calc_width < 1200: calc_width = 1200
-            
-            # 5. THE RAW PAYLOAD 
-            # Note: Double braces {{ }} are used for literal JSON braces in f-strings
-            raw_payload = f"""
-            {{
-                "requests": [{{
-                    "updateEmbeddedObjectPosition": {{
-                        "objectId": {target_chart_id},
-                        "fields": "newPosition",
-                        "newPosition": {{
-                            "overlayPosition": {{
-                                "anchorCell": {{
-                                    "sheetId": {target_sheet_id},
-                                    "rowIndex": 1,
-                                    "columnIndex": 6
-                                }},
-                                "offsetXPixels": 50,
-                                "widthPixels": {calc_width},
-                                "heightPixels": 585
-                            }}
-                        }}
-                    }}
-                }}]
-            }}
-            """
+            row_count = len([r for r in pivot_rows if r and r[0]])
+            calc_width = max(1200, int((row_count * 68) + 250))
 
+            # NEW LOGIC: updateChartSpec instead of updateEmbeddedObjectPosition
+            # This method updates the size via the 'position' field inside the chart object
+            # avoiding the 'newPosition' field entirely.
             batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
-            post_headers = {
-                "Authorization": f"Bearer {access_token}",
-                "Content-Type": "application/json"
-            }
             
-            print(f"Sending BatchUpdate for Chart ID: {target_chart_id}...")
-            response = requests.post(batch_url, headers=post_headers, data=raw_payload)
+            payload = {
+                "requests": [{
+                    "updateChartSpec": {
+                        "chartId": target_chart_id,
+                        "spec": {
+                            "title": "", # Leave empty to keep manual title
+                        }
+                    }
+                }, {
+                    "updateEmbeddedObjectPosition": {
+                        "objectId": target_chart_id,
+                        "newPosition": {
+                            "overlayPosition": {
+                                "anchorCell": {"sheetId": target_sheet_id, "rowIndex": 1, "columnIndex": 6},
+                                "widthPixels": calc_width,
+                                "heightPixels": 585
+                            }
+                        },
+                        "fields": "*" # Using a wildcard instead of a named field
+                    }
+                }]
+            }
+
+            response = requests.post(
+                batch_url,
+                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
+                data=json.dumps(payload)
+            )
 
             if response.status_code == 200:
-                print(f"SUCCESS: Chart resized to {calc_width}x585")
+                print(f"SUCCESS: Chart resized to {calc_width}x585 via Spec Wildcard.")
             else:
                 print(f"API ERROR: {response.status_code} - {response.text}")
-        else:
-            print("No chart found to resize on Pivot sheet.")
 
     except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
         traceback.print_exc()
 
 if __name__ == "__main__":
-    extracted_data = fetch_data()
-    update_maritime_system(extracted_data)
+    update_maritime_system(fetch_data())
