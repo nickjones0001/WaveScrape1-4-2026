@@ -46,6 +46,7 @@ def update_maritime_system(data):
     if not creds_raw or not data: return
 
     try:
+        # 1. AUTH & TOKEN
         creds_info = json.loads(creds_raw)
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
@@ -60,10 +61,11 @@ def update_maritime_system(data):
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
         pivot_sheet = ss.worksheet(PIVOT_SHEET_NAME)
         
+        # 2. PUSH DATA
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
         print(f"SUCCESS: Data pushed to {DATA_SHEET_NAME}")
 
-        # Metadata Fetch
+        # 3. GET IDS
         meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
         spreadsheet = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"}).json()
         
@@ -74,34 +76,31 @@ def update_maritime_system(data):
                 if 'charts' in s: target_chart_id = s['charts'][0]['chartId']
 
         if target_chart_id:
+            # 4. CALC SCALE
             pivot_rows = pivot_sheet.get_values("A:A")
             row_count = len([r for r in pivot_rows if r and r[0]])
             calc_width = max(1200, int((row_count * 68) + 250))
 
-            # NEW LOGIC: updateChartSpec instead of updateEmbeddedObjectPosition
-            # This method updates the size via the 'position' field inside the chart object
-            # avoiding the 'newPosition' field entirely.
+            # 5. THE WILDCARD REQUEST
+            # Using fields: "*" bypasses the need to name "newPosition"
             batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
             
             payload = {
                 "requests": [{
-                    "updateChartSpec": {
-                        "chartId": target_chart_id,
-                        "spec": {
-                            "title": "", # Leave empty to keep manual title
-                        }
-                    }
-                }, {
                     "updateEmbeddedObjectPosition": {
                         "objectId": target_chart_id,
                         "newPosition": {
                             "overlayPosition": {
-                                "anchorCell": {"sheetId": target_sheet_id, "rowIndex": 1, "columnIndex": 6},
+                                "anchorCell": {
+                                    "sheetId": target_sheet_id, 
+                                    "rowIndex": 1, 
+                                    "columnIndex": 6
+                                },
                                 "widthPixels": calc_width,
                                 "heightPixels": 585
                             }
                         },
-                        "fields": "*" # Using a wildcard instead of a named field
+                        "fields": "*" 
                     }
                 }]
             }
@@ -113,7 +112,7 @@ def update_maritime_system(data):
             )
 
             if response.status_code == 200:
-                print(f"SUCCESS: Chart resized to {calc_width}x585 via Spec Wildcard.")
+                print(f"SUCCESS: Chart container set to {calc_width}x585 via Wildcard.")
             else:
                 print(f"API ERROR: {response.status_code} - {response.text}")
 
