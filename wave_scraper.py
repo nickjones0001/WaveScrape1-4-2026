@@ -108,7 +108,7 @@ def update_maritime_system(data):
             if calc_width < 1200: calc_width = 1200
             calc_height = 585 
 
-            # 4. Construct Request (CRITICAL: fields must be 'newPosition' exactly)
+            # 4. Construct Request (MANDATORY: fields="newPosition")
             requests_body = {
                 "requests": [{
                     "updateEmbeddedObjectPosition": {
@@ -129,6 +129,10 @@ def update_maritime_system(data):
                     }
                 }]
             }
+            
+            # Debug: Print the payload to GitHub Logs
+            print("Payload sent to Google API:")
+            print(json.dumps(requests_body, indent=2))
             
             service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=requests_body).execute()
             print(f"SUCCESS: Chart resized to {calc_width}x{calc_height}")
