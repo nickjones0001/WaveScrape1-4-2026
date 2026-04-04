@@ -8,12 +8,15 @@ import pytz
 import traceback
 
 # --- CONFIGURATION ---
+# Target Google Sheet and Tab Names
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 DATA_SHEET_NAME = 'Wavetable'
 PIVOT_SHEET_NAME = 'Wavetable-pivotInfinite'
 
+# Timezone set to Melbourne
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
+# PORT PHILLIP BAY NODES
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
     {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11011?type=waves&simplified=1"},
@@ -26,6 +29,7 @@ HEADERS = {
 }
 
 def fetch_data():
+    """Extracts wave data from JSON endpoints."""
     now_melb = datetime.now(MELB_TZ)
     ext_date = now_melb.strftime("%d/%m/%Y")
     ext_time = now_melb.strftime("%H:%M")
@@ -66,6 +70,7 @@ def fetch_data():
     return rows_to_append
 
 def update_maritime_system(data):
+    """Pushes data and resizes chart using Raw JSON String to bypass library auto-correction."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
     if not creds_raw or not data:
         print("Missing Credentials or Data.")
@@ -83,6 +88,7 @@ def update_maritime_system(data):
         creds.refresh(auth_req)
         access_token = creds.token
         
+        # Gspread for Row Insertion
         client = gspread.authorize(creds)
         ss = client.open_by_key(SPREADSHEET_ID)
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
@@ -90,9 +96,9 @@ def update_maritime_system(data):
         
         # 2. INSERT RAW DATA
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
-        print(f"SUCCESS: Data pushed to {DATA_SHEET_NAME}")
+        print(f"SUCCESS: {len(data)} rows pushed to {DATA_SHEET_NAME}")
 
-        # 3. FETCH METADATA MANUALLY
+        # 3. FETCH METADATA FOR CHART & SHEET IDs
         meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
         meta_res = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"})
         spreadsheet = meta_res.json()
@@ -107,59 +113,43 @@ def update_maritime_system(data):
                     target_chart_id = s['charts'][0]['chartId']
 
         if target_chart_id:
-            # 4. CALCULATE SCALING
+            # 4. CALCULATE DYNAMIC WIDTH (+50% Wider)
             pivot_rows = pivot_sheet.get_values("A:A")
             last_row_count = len([r for r in pivot_rows if r and r[0]])
             
             calc_width = int((last_row_count * 68) + 250)
             if calc_width < 1200: calc_width = 1200
-            calc_height = 585 
-
-            # 5. DIRECT REST API CALL (Bypasses Google Library's camelCase/snake_case conversion)
-            batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
             
-            payload = {
-                "requests": [{
-                    "updateEmbeddedObjectPosition": {
-                        "objectId": target_chart_id,
+            # 5. THE RAW PAYLOAD (Hard-coded strings to bypass library snake_case conversion)
+            # Double curly braces are required for literal braces in f-strings.
+            raw_payload = f"""
+            {{
+                "requests": [{{
+                    "updateEmbeddedObjectPosition": {{
+                        "objectId": {target_chart_id},
                         "fields": "newPosition",
-                        "newPosition": {
-                            "overlayPosition": {
-                                "anchorCell": {
-                                    "sheetId": target_sheet_id,
+                        "newPosition": {{
+                            "overlayPosition": {{
+                                "anchorCell": {{
+                                    "sheetId": {target_sheet_id},
                                     "rowIndex": 1,
                                     "columnIndex": 6
-                                },
+                                }},
                                 "offsetXPixels": 50,
-                                "widthPixels": calc_width,
-                                "heightPixels": calc_height
-                            }
-                        }
-                    }
-                }]
-            }
+                                "widthPixels": {calc_width},
+                                "heightPixels": 585
+                            }}
+                        }}
+                    }}
+                }}]
+            }}
+            """
 
-            print("Sending Direct REST Payload...")
+            batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
+            print(f"Sending BatchUpdate for Chart ID: {target_chart_id}...")
+            
             response = requests.post(
                 batch_url,
-                headers={
+                headers={{
                     "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json"
-                },
-                data=json.dumps(payload)
-            )
-
-            if response.status_code == 200:
-                print(f"SUCCESS: Chart resized to {calc_width}x{calc_height}")
-            else:
-                print(f"REST API ERROR: {response.status_code} - {response.text}")
-        else:
-            print("No chart found to resize.")
-
-    except Exception as e:
-        print(f"CRITICAL ERROR: {str(e)}")
-        traceback.print_exc()
-
-if __name__ == "__main__":
-    extracted_data = fetch_data()
-    update_maritime_system(extracted_data)
+                    "Content-Type": "application/json
