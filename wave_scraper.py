@@ -3,7 +3,6 @@ import requests
 import gspread
 import json
 from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
 from datetime import datetime
 import pytz
 import traceback
@@ -73,22 +72,30 @@ def update_maritime_system(data):
         return
 
     try:
+        # 1. AUTHENTICATION & TOKEN GENERATION
         creds_info = json.loads(creds_raw)
-        scope = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
+        scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
+        
+        # Manually refresh the token for the raw REST call
+        import google.auth.transport.requests
+        auth_req = google.auth.transport.requests.Request()
+        creds.refresh(auth_req)
+        access_token = creds.token
         
         client = gspread.authorize(creds)
         ss = client.open_by_key(SPREADSHEET_ID)
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
         pivot_sheet = ss.worksheet(PIVOT_SHEET_NAME)
         
-        # 1. Insert Data
+        # 2. INSERT RAW DATA
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
         print(f"SUCCESS: Data pushed to {DATA_SHEET_NAME}")
 
-        # 2. Setup Discovery Service
-        service = build('sheets', 'v4', credentials=creds)
-        spreadsheet = service.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        # 3. FETCH METADATA MANUALLY
+        meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
+        meta_res = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"})
+        spreadsheet = meta_res.json()
         
         target_sheet_id = None
         target_chart_id = None
@@ -100,7 +107,7 @@ def update_maritime_system(data):
                     target_chart_id = s['charts'][0]['chartId']
 
         if target_chart_id:
-            # 3. Calculate Dimensions
+            # 4. CALCULATE SCALING
             pivot_rows = pivot_sheet.get_values("A:A")
             last_row_count = len([r for r in pivot_rows if r and r[0]])
             
@@ -108,18 +115,20 @@ def update_maritime_system(data):
             if calc_width < 1200: calc_width = 1200
             calc_height = 585 
 
-            # 4. Construct Request (MANDATORY: fields="newPosition")
-            requests_body = {
+            # 5. DIRECT REST API CALL (Bypasses Google Library's camelCase/snake_case conversion)
+            batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
+            
+            payload = {
                 "requests": [{
                     "updateEmbeddedObjectPosition": {
                         "objectId": target_chart_id,
-                        "fields": "newPosition", 
+                        "fields": "newPosition",
                         "newPosition": {
                             "overlayPosition": {
                                 "anchorCell": {
                                     "sheetId": target_sheet_id,
-                                    "rowIndex": 1,      # Row 2
-                                    "columnIndex": 6    # Col G
+                                    "rowIndex": 1,
+                                    "columnIndex": 6
                                 },
                                 "offsetXPixels": 50,
                                 "widthPixels": calc_width,
@@ -129,13 +138,21 @@ def update_maritime_system(data):
                     }
                 }]
             }
-            
-            # Debug: Print the payload to GitHub Logs
-            print("Payload sent to Google API:")
-            print(json.dumps(requests_body, indent=2))
-            
-            service.spreadsheets().batchUpdate(spreadsheetId=SPREADSHEET_ID, body=requests_body).execute()
-            print(f"SUCCESS: Chart resized to {calc_width}x{calc_height}")
+
+            print("Sending Direct REST Payload...")
+            response = requests.post(
+                batch_url,
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Content-Type": "application/json"
+                },
+                data=json.dumps(payload)
+            )
+
+            if response.status_code == 200:
+                print(f"SUCCESS: Chart resized to {calc_width}x{calc_height}")
+            else:
+                print(f"REST API ERROR: {response.status_code} - {response.text}")
         else:
             print("No chart found to resize.")
 
