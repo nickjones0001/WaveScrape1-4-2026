@@ -11,9 +11,11 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12' # Upgraded version
+          python-version: '3.12'
       - name: Install dependencies
-        run: pip install requests gspread google-auth pytz
+        run: |
+          pip install requests gspread google-auth pytz \
+          google-api-python-client google-auth-httplib2 google-auth-oauthlib
       - name: Execute Script
         env:
           GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS }}
