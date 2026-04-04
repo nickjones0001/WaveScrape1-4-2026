@@ -8,15 +8,12 @@ import pytz
 import traceback
 
 # --- CONFIGURATION ---
-# Target Google Sheet and Tab Names
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 DATA_SHEET_NAME = 'Wavetable'
 PIVOT_SHEET_NAME = 'Wavetable-pivotInfinite'
 
-# Timezone set to Melbourne
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
-# PORT PHILLIP BAY NODES
 NODES = [
     {"name": "Mt Eliza", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11001?type=waves&simplified=1"},
     {"name": "Sandringham", "url": "https://auswaves.org/wp-json/waves/v1/buoys/11011?type=waves&simplified=1"},
@@ -70,25 +67,23 @@ def fetch_data():
     return rows_to_append
 
 def update_maritime_system(data):
-    """Pushes data and resizes chart using Raw JSON String to bypass library auto-correction."""
+    """Pushes data and resizes chart using Raw JSON String."""
     creds_raw = os.environ.get('GOOGLE_CREDS')
     if not creds_raw or not data:
         print("Missing Credentials or Data.")
         return
 
     try:
-        # 1. AUTHENTICATION & TOKEN GENERATION
+        # 1. AUTHENTICATION
         creds_info = json.loads(creds_raw)
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
         
-        # Manually refresh the token for the raw REST call
         import google.auth.transport.requests
         auth_req = google.auth.transport.requests.Request()
         creds.refresh(auth_req)
         access_token = creds.token
         
-        # Gspread for Row Insertion
         client = gspread.authorize(creds)
         ss = client.open_by_key(SPREADSHEET_ID)
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
@@ -98,30 +93,31 @@ def update_maritime_system(data):
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
         print(f"SUCCESS: {len(data)} rows pushed to {DATA_SHEET_NAME}")
 
-        # 3. FETCH METADATA FOR CHART & SHEET IDs
+        # 3. FETCH METADATA
         meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
-        meta_res = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"})
+        meta_headers = {"Authorization": f"Bearer {access_token}"}
+        meta_res = requests.get(meta_url, headers=meta_headers)
         spreadsheet = meta_res.json()
         
         target_sheet_id = None
         target_chart_id = None
         
-        for s in spreadsheet['sheets']:
+        for s in spreadsheet.get('sheets', []):
             if s['properties']['title'] == PIVOT_SHEET_NAME:
                 target_sheet_id = s['properties']['sheetId']
                 if 'charts' in s and len(s['charts']) > 0:
                     target_chart_id = s['charts'][0]['chartId']
 
-        if target_chart_id:
-            # 4. CALCULATE DYNAMIC WIDTH (+50% Wider)
+        if target_chart_id is not None:
+            # 4. CALCULATE DYNAMIC WIDTH
             pivot_rows = pivot_sheet.get_values("A:A")
             last_row_count = len([r for r in pivot_rows if r and r[0]])
             
             calc_width = int((last_row_count * 68) + 250)
             if calc_width < 1200: calc_width = 1200
             
-            # 5. THE RAW PAYLOAD (Hard-coded strings to bypass library snake_case conversion)
-            # Double curly braces are required for literal braces in f-strings.
+            # 5. THE RAW PAYLOAD 
+            # Note: Double braces {{ }} are used for literal JSON braces in f-strings
             raw_payload = f"""
             {{
                 "requests": [{{
@@ -146,10 +142,25 @@ def update_maritime_system(data):
             """
 
             batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
-            print(f"Sending BatchUpdate for Chart ID: {target_chart_id}...")
+            post_headers = {
+                "Authorization": f"Bearer {access_token}",
+                "Content-Type": "application/json"
+            }
             
-            response = requests.post(
-                batch_url,
-                headers={{
-                    "Authorization": f"Bearer {access_token}",
-                    "Content-Type": "application/json
+            print(f"Sending BatchUpdate for Chart ID: {target_chart_id}...")
+            response = requests.post(batch_url, headers=post_headers, data=raw_payload)
+
+            if response.status_code == 200:
+                print(f"SUCCESS: Chart resized to {calc_width}x585")
+            else:
+                print(f"API ERROR: {response.status_code} - {response.text}")
+        else:
+            print("No chart found to resize on Pivot sheet.")
+
+    except Exception as e:
+        print(f"CRITICAL ERROR: {str(e)}")
+        traceback.print_exc()
+
+if __name__ == "__main__":
+    extracted_data = fetch_data()
+    update_maritime_system(extracted_data)
