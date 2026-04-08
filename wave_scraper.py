@@ -1,8 +1,8 @@
-# --- COPY START ---
 import os
 import requests
 import gspread
 import json
+import math
 from google.oauth2.service_account import Credentials
 from datetime import datetime
 import pytz
@@ -22,42 +22,72 @@ NODES = [
 
 HEADERS = {"Accept": "application/json", "User-Agent": "Mozilla/5.0"}
 
+def clean_float(value):
+    """
+    Ensures data is a JSON-compliant float. 
+    Converts NaN or invalid strings to 0.0.
+    """
+    try:
+        f_val = float(value)
+        if math.isnan(f_val) or math.isinf(f_val):
+            return 0.0
+        return f_val
+    except (TypeError, ValueError):
+        return 0.0
+
 def fetch_data():
     now_melb = datetime.now(MELB_TZ)
     ext_date, ext_time = now_melb.strftime("%d/%m/%Y"), now_melb.strftime("%H:%M")
     rows = []
+    
     for node in NODES:
         try:
             res = requests.get(node["url"], headers=HEADERS, timeout=15)
             if res.status_code == 200:
-                p = res.json().get("data", [{}])[0]
-                # Standardizing timestamp to Australia/Melbourne
-                dt = datetime.fromtimestamp(int(p["time"]), pytz.utc).astimezone(MELB_TZ)
+                data_list = res.json().get("data", [])
+                if not data_list:
+                    continue
                 
-                # Converting numerical strings to floats for Data Integrity
+                p = data_list[0]
+                
+                # Verify we have a timestamp before processing
+                ts = p.get("time")
+                if ts is None:
+                    continue
+
+                dt = datetime.fromtimestamp(int(ts), pytz.utc).astimezone(MELB_TZ)
+                
+                # Sanitize all numerical inputs to prevent JSON 'nan' errors
                 rows.append([
                     dt.strftime("%Y-%m-%d"), 
                     dt.strftime("%H:%M"), 
                     dt.strftime("%Y-%m-%d %H:%M"),
                     node["name"], 
-                    float(p.get("hsig", 0)), 
-                    float(p.get("tp", 0)),
-                    float(p.get("tpdeg", 0)), 
-                    float(p.get("windspeed", 0)), 
-                    "",  # Placeholder for missing column
-                    float(p.get("winddirect", 0)), 
+                    clean_float(p.get("hsig")), 
+                    clean_float(p.get("tp")),
+                    clean_float(p.get("tpdeg")), 
+                    clean_float(p.get("windspeed")), 
+                    "",  
+                    clean_float(p.get("winddirect")), 
                     ext_date, 
                     ext_time, 
                     f"{ext_date} {ext_time}"
                 ])
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"Error fetching {node['name']}: {e}")
+            
     return rows
 
 def update_maritime_system(data):
     creds_raw = os.environ.get('GOOGLE_CREDS')
-    if not creds_raw or not data:
-        print("Error: Missing credentials or no data fetched.")
+    
+    # Check if we actually have data to push
+    if not data:
+        print("No valid data fetched from buoys. Skipping update.")
+        return
+
+    if not creds_raw:
+        print("Error: GOOGLE_CREDS environment variable not found.")
         return
 
     try:
@@ -73,12 +103,11 @@ def update_maritime_system(data):
         
         # 3. PUSH DATA
         # insert_rows at row=2 ensures newest data is at the top.
-        # value_input_option='USER_ENTERED' ensures decimals and dates are recognized correctly.
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
         
         print(f"SUCCESS: {len(data)} rows pushed to {DATA_SHEET_NAME} at Row 2.")
 
-    except Exception as e:
+    except Exception:
         traceback.print_exc()
 
 if __name__ == "__main__":
