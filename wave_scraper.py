@@ -1,3 +1,4 @@
+# --- COPY START ---
 import os
 import requests
 import gspread
@@ -10,7 +11,6 @@ import traceback
 # --- CONFIGURATION ---
 SPREADSHEET_ID = '1a0NUGV_PngH8sO2ZoqoiqGyAEKwgCcvK04B2Gpu4g7Q'
 DATA_SHEET_NAME = 'Wavetable'
-PIVOT_SHEET_NAME = 'Wavetable-pivotInfinite'
 
 MELB_TZ = pytz.timezone('Australia/Melbourne')
 
@@ -31,92 +31,57 @@ def fetch_data():
             res = requests.get(node["url"], headers=HEADERS, timeout=15)
             if res.status_code == 200:
                 p = res.json().get("data", [{}])[0]
+                # Standardizing timestamp to Australia/Melbourne
                 dt = datetime.fromtimestamp(int(p["time"]), pytz.utc).astimezone(MELB_TZ)
+                
+                # Converting numerical strings to floats for Data Integrity
                 rows.append([
-                    dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M"), dt.strftime("%Y-%m-%d %H:%M"),
-                    node["name"], float(p.get("hsig", 0)), float(p.get("tp", 0)),
-                    float(p.get("tpdeg", 0)), float(p.get("windspeed", 0)), "", 
-                    float(p.get("winddirect", 0)), ext_date, ext_time, f"{ext_date} {ext_time}"
+                    dt.strftime("%Y-%m-%d"), 
+                    dt.strftime("%H:%M"), 
+                    dt.strftime("%Y-%m-%d %H:%M"),
+                    node["name"], 
+                    float(p.get("hsig", 0)), 
+                    float(p.get("tp", 0)),
+                    float(p.get("tpdeg", 0)), 
+                    float(p.get("windspeed", 0)), 
+                    "",  # Placeholder for missing column
+                    float(p.get("winddirect", 0)), 
+                    ext_date, 
+                    ext_time, 
+                    f"{ext_date} {ext_time}"
                 ])
-        except: pass
+        except Exception:
+            pass
     return rows
 
 def update_maritime_system(data):
     creds_raw = os.environ.get('GOOGLE_CREDS')
-    if not creds_raw or not data: return
+    if not creds_raw or not data:
+        print("Error: Missing credentials or no data fetched.")
+        return
 
     try:
-        # 1. AUTH & TOKEN
+        # 1. AUTHENTICATION
         creds_info = json.loads(creds_raw)
         scope = ["https://www.googleapis.com/auth/spreadsheets"]
         creds = Credentials.from_service_account_info(creds_info, scopes=scope)
-        
-        import google.auth.transport.requests
-        auth_req = google.auth.transport.requests.Request()
-        creds.refresh(auth_req)
-        access_token = creds.token
-        
         client = gspread.authorize(creds)
+        
+        # 2. OPEN SHEET
         ss = client.open_by_key(SPREADSHEET_ID)
         data_sheet = ss.worksheet(DATA_SHEET_NAME)
-        pivot_sheet = ss.worksheet(PIVOT_SHEET_NAME)
         
-        # 2. PUSH DATA
+        # 3. PUSH DATA
+        # insert_rows at row=2 ensures newest data is at the top.
+        # value_input_option='USER_ENTERED' ensures decimals and dates are recognized correctly.
         data_sheet.insert_rows(data, row=2, value_input_option='USER_ENTERED')
-        print(f"SUCCESS: Data pushed to {DATA_SHEET_NAME}")
-
-        # 3. GET IDS
-        meta_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}"
-        spreadsheet = requests.get(meta_url, headers={"Authorization": f"Bearer {access_token}"}).json()
         
-        target_sheet_id, target_chart_id = None, None
-        for s in spreadsheet.get('sheets', []):
-            if s['properties']['title'] == PIVOT_SHEET_NAME:
-                target_sheet_id = s['properties']['sheetId']
-                if 'charts' in s: target_chart_id = s['charts'][0]['chartId']
-
-        if target_chart_id:
-            # 4. CALC SCALE (Updated: 82px per row for +20% extra width)
-            pivot_rows = pivot_sheet.get_values("A:A")
-            row_count = len([r for r in pivot_rows if r and r[0]])
-            calc_width = max(1400, int((row_count * 82) + 300))
-
-            # 5. THE WILDCARD REQUEST
-            batch_url = f"https://sheets.googleapis.com/v4/spreadsheets/{SPREADSHEET_ID}:batchUpdate"
-            
-            payload = {
-                "requests": [{
-                    "updateEmbeddedObjectPosition": {
-                        "objectId": target_chart_id,
-                        "newPosition": {
-                            "overlayPosition": {
-                                "anchorCell": {
-                                    "sheetId": target_sheet_id, 
-                                    "rowIndex": 1, 
-                                    "columnIndex": 6
-                                },
-                                "widthPixels": calc_width,
-                                "heightPixels": 585
-                            }
-                        },
-                        "fields": "*" 
-                    }
-                }]
-            }
-
-            response = requests.post(
-                batch_url,
-                headers={"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"},
-                data=json.dumps(payload)
-            )
-
-            if response.status_code == 200:
-                print(f"SUCCESS: Chart container expanded to {calc_width}x585.")
-            else:
-                print(f"API ERROR: {response.status_code} - {response.text}")
+        print(f"SUCCESS: {len(data)} rows pushed to {DATA_SHEET_NAME} at Row 2.")
 
     except Exception as e:
         traceback.print_exc()
 
 if __name__ == "__main__":
-    update_maritime_system(fetch_data())
+    current_data = fetch_data()
+    update_maritime_system(current_data)
+# --- COPY END ---
